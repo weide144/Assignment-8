@@ -1,0 +1,266 @@
+---
+title: "Assignment 6 Dashboard"
+author: "Ben Weideman"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+---
+
+```{r setup, include = FALSE, echo = FALSE}
+library(tidyverse)
+library(lubridate)
+library(gt)
+library(paletteer)
+library(plotly)
+library(flexdashboard)
+library(ggthemes)
+library(leaflet)
+library(sf)
+library(tidycensus)
+library(osmdata)
+library(tigris)
+library(ggridges)
+library(gtExtras)
+library(plotly)
+library(ggmap)
+library(haven)
+library(viridis)
+library(htmltools)
+
+## Load the API key
+api_key <- Sys.getenv("CENSUS_API_KEY")
+
+#Working directory for .RMD
+knitr::opts_knit$set(echo = TRUE,
+                     root.dir = rprojroot::find_rstudio_root_file())
+
+#Controlling figure output in markdown
+knitr::opts_chunk$set(
+#  fig.height =   
+  fig.width = 6,
+#  fig.asp = .5,
+  out.width = "90%",
+#  out.height = 
+ fig.align  = "center",
+  cache = FALSE,
+  eval  = TRUE,
+  echo  = FALSE,
+  warning = FALSE
+)
+
+#My Colours (from viridis)
+my_purple <- "#440154FF"
+my_yellow <- "#FDE725FF"
+
+#Set Theme for ggplot2
+theme_set(theme_bw() + theme(plot.title = element_text(hjust = 0.5), legend.position = "bottom"))
+
+#Set Scientific notation output and decimal places for knitr
+options(scipen = 999)
+options(digits = 4)
+options(dplyr.summarise.inform = FALSE)
+```
+
+
+```{r Leaflet MN Map, include = FALSE, echo = FALSE}
+#from OSM MN
+minnesota.box <- osmdata::getbb("minnesota")
+minnesota_base.map <- get_map(
+  location = minnesota.box,
+  source = "stamen",
+  maptype = "watercolor",
+  crop = TRUE
+)
+
+#MN Open Street Map data
+mn_sf.df <- opq(bbox = "minnesota", timeout = 120) %>% 
+             add_osm_feature(key = "shop", value = c("bakery", "florist", "hairdresser")) %>% 
+             osmdata_sf()
+
+#Extract BUilding points
+shop_points.df <- mn_sf.df$osm_points %>% 
+  janitor::clean_names() %>%
+  filter(!is.na(shop)) %>% #only retain 'valid' tags
+  dplyr::select(osm_id, name, shop, opening_hours, phone, website, geometry) %>%
+  mutate(shop = str_to_title(shop) %>% as_factor())
+
+#Leaflet
+#Extract the levels/order of shop type factor
+shop_types <- levels(shop_points.df$shop)
+n_types    <- length(shop_types)
+
+#Initialize our colour pallete (discrete in this case)
+my_pallete <- colorFactor(viridis_pal(option = "D")(n_types), levels = shop_types)
+
+shop_label.df <- shop_points.df %>%
+  mutate(
+    across(
+      c(name, opening_hours:website),
+      ~ifelse(is.na(.x), "NA", .x)
+    ),
+    text_label = str_c(
+                   name,
+                   "<br/>Store Type: ",
+                   shop,
+                   "<br/>Open Hours: ",
+                   opening_hours,
+                   "<br/>Phone: ",
+                   phone,
+                   "<br/>Website: ",
+                   website
+                 )
+  )
+
+shop_leafley <- shop_label.df %>%
+  leaflet() %>%
+  addProviderTiles('CartoDB.Positron') %>% 
+  addCircleMarkers(
+    color   = ~my_pallete(shop),
+    label   = ~map(text_label, HTML), #map over labels, make html
+    opacity = 0.6, #alpha
+    weight  = 4, #outline strength
+    radius  = 4 #size of circle
+  ) %>%
+  addLegend(
+    title    = "Store Type",
+    position = "bottomright",
+    colors   = viridis_pal(option = "D")(n_types),
+    labels   = shop_types 
+  )
+
+```
+
+```{r hennepin county ggplotly, include = FALSE, echo = FALSE, cache = TRUE}
+census_api_key(api_key, install = TRUE, overwrite = TRUE)
+
+mn_Blackpop.df <- get_acs(
+  geography = "tract",
+  variables = "C02003_004E", #Code for median income
+  state     = "MN",
+  county    = "Hennepin",
+  year      = 2020,
+  geometry  = TRUE,
+  cb        = FALSE
+) %>%
+  erase_water(area_threshold = 0.75)
+
+#Get Bounding box and county outline
+mn.box           <- osmdata::getbb("minnesota")
+hennepin.box     <- osmdata::getbb("hennepin")
+hennepin.outline <- osmdata::getbb("hennepin", format_out = "polygon")[[1]] %>%
+  as_tibble() %>%
+  rename(longitude = V1, latitude = V2)
+
+#Get map from ggmap
+mn_base.map <- get_map(
+                location = hennepin.box,
+                source   = "stamen",
+                maptype  = "terrain",
+                crop = TRUE
+               )
+
+#Create Base Map
+hennepin_base.gg <- ggmap(mn_base.map) +
+  geom_polygon(data = hennepin.outline, aes(x = longitude, y = latitude), colour = "black", size = 1.6, alpha = 0.1) +
+  theme_map() +
+  theme(
+    plot.title   = element_text(size  = 16,
+                                hjust = 0.5),
+    legend.text  = element_text(size = 16),
+    legend.title = element_text(size = 16),
+    legend.position = "right"
+  )
+
+
+mn_Blackpop_plotly.df <- mn_Blackpop.df %>%
+  mutate(
+    tract      = str_split(NAME, ",") %>%
+                 map_chr(1) %>%
+                 str_remove("Census Tract "),
+    text_label = str_c(
+                  "Tract: ",
+                  tract,
+                  "\nPop. Estimate: "
+                 )
+  )
+
+coord_ggmap <- st_crs(hennepin_base.gg) #NA
+coord_sf    <- st_crs(mn_Blackpop_plotly.df) #NAD83
+
+#Create new map
+mn_blackPop.ggmap <- hennepin_base.gg +  
+  geom_sf(data = mn_Blackpop_plotly.df, 
+          aes(fill = estimate, text = text_label),
+          colour = "black", size = 0.1,
+          inherit.aes = FALSE) + 
+  labs(title = "Hennepin Black Pop. Estimate") + 
+  scale_fill_viridis_c("Pop. Estimate") +
+  theme_map()
+
+```
+
+```{r final map, include = FALSE, echo = FALSE, cache = TRUE}
+mn_shp_file.df <-  st_read("./data/USA_Counties/USA_Counties.shp", quiet = TRUE) %>%
+  janitor::clean_names() %>%
+  filter(state_name %in% "Minnesota")
+
+mn_pop.gg <- 
+  mn_shp_file.df %>%
+  dplyr::select(name, females, males, geometry) %>%
+  rename(county = name) %>%
+  group_by(county) %>%
+  summarise(
+    perc_female = females / (males + females),
+    geometry = geometry
+  ) %>%
+  ggplot() +
+  geom_sf(aes(fill = perc_female),
+          colour = "black", size = 0.8, alpha = 0.6) +
+  labs(
+    title = "2017 MN Percent Female by County"
+  ) +
+  scale_fill_viridis_c("Percent Female", labels = scales::percent) +
+  theme_map() +
+    theme(
+    plot.title   = element_text(size  = 24,
+                                hjust = 0.5),
+    legend.text  = element_text(size = 20),
+    legend.title = element_text(size = 20),
+    legend.position = "right"
+  )
+
+mn_pop_plotly <- ggplotly(mn_pop.gg, 
+         tooltip = "text",
+         height  = 600,
+         width   = 800) %>%
+  style(hoveron = "fills")
+
+```
+
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Chart A
+
+```{r leaflet}
+shop_leafley
+
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Chart B
+
+```{r ggmap}
+mn_blackPop.ggmap
+```
+
+### Chart C
+
+```{r my_map}
+mn_pop_plotly
+```
+
