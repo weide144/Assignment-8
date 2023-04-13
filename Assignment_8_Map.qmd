@@ -1,0 +1,103 @@
+---
+title: "Assignment 8 Map"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(gt)
+library(paletteer)
+library(plotly)
+library(flexdashboard)
+library(ggthemes)
+library(leaflet)
+library(sf)
+library(tidycensus)
+library(osmdata)
+library(tigris)
+library(ggridges)
+library(gtExtras)
+library(plotly)
+library(ggmap)
+library(haven)
+library(viridis)
+library(htmltools)
+
+## Load the API key
+api_key <- Sys.getenv("CENSUS_API_KEY")
+```
+
+Assignment 8 Map
+
+```{r}
+census_api_key(api_key, install = TRUE, overwrite = TRUE)
+
+mn_Blackpop.df <- get_acs(
+  geography = "tract",
+  variables = "C02003_004E", #Code for median income
+  state     = "MN",
+  county    = "Hennepin",
+  year      = 2020,
+  geometry  = TRUE,
+  cb        = FALSE
+) %>%
+  erase_water(area_threshold = 0.75)
+
+#Get Bounding box and county outline
+mn.box           <- osmdata::getbb("minnesota")
+hennepin.box     <- osmdata::getbb("hennepin")
+hennepin.outline <- osmdata::getbb("hennepin", format_out = "polygon")[[1]] %>%
+  as_tibble() %>%
+  rename(longitude = V1, latitude = V2)
+
+#Get map from ggmap
+mn_base.map <- get_map(
+                location = hennepin.box,
+                source   = "stamen",
+                maptype  = "terrain",
+                crop = TRUE
+               )
+
+#Create Base Map
+hennepin_base.gg <- ggmap(mn_base.map) +
+  geom_polygon(data = hennepin.outline, aes(x = longitude, y = latitude), colour = "black", size = 1.6, alpha = 0.1) +
+  theme_map() +
+  theme(
+    plot.title   = element_text(size  = 16,
+                                hjust = 0.5),
+    legend.text  = element_text(size = 16),
+    legend.title = element_text(size = 16),
+    legend.position = "right"
+  )
+
+
+mn_Blackpop_plotly.df <- mn_Blackpop.df %>%
+  mutate(
+    tract      = str_split(NAME, ",") %>%
+                 map_chr(1) %>%
+                 str_remove("Census Tract "),
+    text_label = str_c(
+                  "Tract: ",
+                  tract,
+                  "\nPop. Estimate: "
+                 )
+  )
+
+coord_ggmap <- st_crs(hennepin_base.gg) #NA
+coord_sf    <- st_crs(mn_Blackpop_plotly.df) #NAD83
+
+#Create new map
+mn_blackPop.ggmap <- hennepin_base.gg +  
+  geom_sf(data = mn_Blackpop_plotly.df, 
+          aes(fill = estimate, text = text_label),
+          colour = "black", size = 0.1,
+          inherit.aes = FALSE) + 
+  labs(title = "Hennepin Black Pop. Estimate") + 
+  scale_fill_viridis_c("Pop. Estimate") +
+  theme_map()
+
+
+mn_blackPop.ggmap
+```
