@@ -35,6 +35,28 @@ jobs:
                any::purrr
                any::leaflet
                any::gepaf
+               any::tidyverse
+               any::gt
+               any::gepaf
+               any::paletteer
+               any::plotly
+               any::flexdashboard
+               any::ggthemes
+               any::sf
+               any::tidycensus
+               any::gepaf
+               any::osmdata
+               any::gepaf
+               any::tigris
+               any::gepaf
+               any::ggridges
+               any::gtExtras
+               any::gepaf
+               any::plotly
+               any::ggmap
+               any::viridis
+               any::haven
+               any::htmltools        
       - name: Render document
         uses: quarto-dev/quarto-actions/render@v2
         env:
